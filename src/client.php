@@ -37,7 +37,7 @@ class RpcClient
 
     public function set_expiry($expiry)
     {
-        $this->expiry=$expiry;
+        $this->expiry = $expiry;
     }
 
     public function set_default_callback($callback)
@@ -47,8 +47,8 @@ class RpcClient
 
     public function start_request($method, $params, $callback = null, $expiry = null)
     {
-        if($expiry===null){
-            $expiry=$this->expiry;
+        if ($expiry === null) {
+            $expiry = $this->expiry;
         }
         $seq = ++self::$sequence;
         $timestamp = rpc_millitime();
@@ -58,11 +58,11 @@ class RpcClient
         $frames[] = $method;
         $frames[] = rpc_pack_message($params);
         rpc_send_frames($this->socket, $frames);
-        self::$pending_requests[$seq] = array($this, $callback);
+        self::$pending_requests[$seq] = array($this, $callback, $timestamp);
         return $seq;
     }
 
-    public function wait_for_responses($timeout = null)
+    public function wait_for_response($timeout = null)
     {
         $poll = new ZMQPoll();
         foreach (self::$sockets as $socket) {
@@ -84,7 +84,13 @@ class RpcClient
                 self::process_reply($socket);
             }
             if ($timeout !== null) {
-                if (rpc_millitime() - $beginTime >=$timeout_micro) {
+                if (rpc_millitime() - $beginTime > $timeout_micro) {
+                    //如果超时了，需要清除pending_requests
+                    foreach(self::$pending_requests as $key=>$val){
+                        if($val[2]+$timeout_micro<rpc_millitime()){
+                            unset(self::$pending_requests[$key]);
+                        }
+                    }
                     break;
                 }
             }
@@ -120,7 +126,7 @@ class RpcClient
             $callback = $obj->default_callback;
         }
         if ($callback) {
-            call_user_func_array($callback, array($response,$status));
+            call_user_func_array($callback, array($response, $status));
         } else {
             self::store_response($seq, $status, $response);
         }
@@ -128,7 +134,7 @@ class RpcClient
 
     protected static function store_response($seq, $status, $response)
     {
-        self::$responses[$seq] = array($response,$status);
+        self::$responses[$seq] = array($response, $status);
     }
 
 }

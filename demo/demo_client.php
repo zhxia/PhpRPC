@@ -41,7 +41,7 @@ while(true){
             echo 'failed,status:'.$status.PHP_EOL;
         }
     });
-    $client->wait_for_responses();
+    $client->wait_for_response();
     break;
 //    sleep(1);
 }
