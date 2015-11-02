@@ -3,6 +3,8 @@
 基于ZMQ的异步RPC框架，可用于将单个PHP进程中的串行调用转换为非阻塞的异步调用，缩短整个请求耗时
 
 使用示例：
+开启服务端：
+    php demo_service.php -f ipc:///tmp/frontend.ipc -b ipc:///tmp/backend.ipc -m 2 -n 1
 ```php
 require_once dirname(__FILE__) . '/../src/client.php';
 

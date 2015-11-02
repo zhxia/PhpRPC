@@ -38,4 +38,5 @@ $client->start_request('longTimeWork', null, function ($resp, $status) {
 });
 $client->wait_for_response(0.1);
 
-//    sleep(1);
+// start proxy
+// php demo_service.php -f ipc:///tmp/frontend.ipc -b ipc:///tmp/backend.ipc -m 2 -n 1
