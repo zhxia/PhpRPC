@@ -1,93 +1,257 @@
-
 <?php
 require_once dirname(__FILE__) . '/functions.php';
-class RpcProxy {
-	const VERSION='10';
-	private $socket_worker;
-	private $socket_client;
-	private $workers;
-	private $interval;
-	private $interrupted;
 
-	public function __construct($context,$frontend,$backend){
-		$socket=new ZMQSocket($context,ZMQ::SOCKET_ROUTER);
-		$socket->setsockopt(ZMQ::SOCKOPT_LINGER, 0);
-		$socket->bind($frontend);
-		$this->socket_client=$socket;
+class RpcProxy
+{
+    const VERSION = '10';
+    private $timeout = 600;  //worker 进程的生存时间
+    private $maxWorkerNum = 5; //最大worker数量
+    private $minWorkerNum = 1; // 最小worker数量
+    const MAINTAIN_INTERVAL = 10; //定时维护worker进程的时间间隔
+    private $workers;
+    private $workerQueue;
+    private $taskQueue;
+    private $socketClient;
+    private $socketWorker;
+    private $interval;
+    private $interrupted;
+    private $workerScript;
+    private $lastMaintainTime = 0;
+    private $backendPoint;
 
-		$socket=new ZMQSocket($context,ZMQ::SOCKET_ROUTER);
-		$socket->setsockopt(ZMQ::SOCKOPT_LINGER, 0);
-		$socket->bind($backend);
-		$this->socket_worker=$socket;
 
-        $this->interval=1000*1000;
-        $this->workers=array();
-        $this->interrupted=false;
-	}
+    function __construct($context, $frontend, $backend)
+    {
+        $this->workers = array(); //element:array('wid'=>array('creteTime','flag'))
+        $this->workerQueue = array();
+        $this->taskQueue = new SplQueue();
 
-	public function run(){
-        rpc_log('proxy is running...');
-		while (!$this->interrupted) {
-			$poll = new ZMQPoll();
+        $socket = new ZMQSocket($context, ZMQ::SOCKET_ROUTER);
+        $socket->setsockopt(ZMQ::SOCKOPT_LINGER, 0);
+        $socket->bind($frontend);
+        $this->socketClient = $socket;
+
+        $socket = new ZMQSocket($context, ZMQ::SOCKET_ROUTER);
+        $socket->setsockopt(ZMQ::SOCKOPT_LINGER, 0);
+        $socket->bind($backend);
+        $this->socketWorker = $socket;
+        $this->backendPoint = $backend;
+
+        $this->interval = 1000 * 600;
+        $this->interrupted = false;
+    }
+
+    /**
+     * @param mixed $maxWorkerNum
+     */
+    public function setMaxWorkerNum($maxWorkerNum)
+    {
+        $this->maxWorkerNum = $maxWorkerNum;
+    }
+
+    /**
+     * @param string $workerScript
+     */
+    public function setWorkerScript($workerScript)
+    {
+        $this->workerScript = $workerScript;
+    }
+
+    /**
+     * @param int $minWorkerNum
+     */
+    public function setMinWorkerNum($minWorkerNum)
+    {
+        $this->minWorkerNum = $minWorkerNum;
+    }
+
+
+    /**
+     * @param int $timeout
+     */
+    public function setTimeout($timeout)
+    {
+        $this->timeout = $timeout;
+    }
+
+
+    public function run()
+    {
+        rpc_log('proxy is running...',LOG_INFO);
+        register_shutdown_function(array($this, 'shutdown'));
+        while (!$this->interrupted) {
+            $this->maintain();
+            $poll = new ZMQPoll();
             if (!empty($this->workers)) {
-                $poll->add($this->socket_client, ZMQ::POLL_IN);
+                $poll->add($this->socketClient, ZMQ::POLL_IN);
             }
-            $poll->add($this->socket_worker,ZMQ::POLL_IN);
-            $readable=$writable=array();
+            $poll->add($this->socketWorker, ZMQ::POLL_IN);
+            $readable = $writable = array();
             $events = $poll->poll($readable, $writable, $this->interval);
             if ($events == 0) {
                 continue;
             }
-            foreach($readable as $socket){
-            	if($socket===$this->socket_worker){
+            foreach ($readable as $socket) {
+                if ($socket === $this->socketWorker) {
                     rpc_log('get message from worker');
-            		$this->worker_process();
-            	}
-            	elseif ($socket===$this->socket_client) {
+                    $this->workerProcess();
+                } elseif ($socket === $this->socketClient) {
                     rpc_log('get message from client');
-            		$this->client_process();
-            	}
+                    $this->clientProcess();
+                }
             }
-		}
-	}
+        }
+    }
 
-	protected function client_process(){
-        $frames=rpc_receive_frames($this->socket_client);
-        list($envelope,$message)=rpc_unwarp_message($frames);
-        $version=array_shift($message);
+    protected function maintain()
+    {
+        if ($this->lastMaintainTime > 0 && (time() - $this->lastMaintainTime < self::MAINTAIN_INTERVAL)) {
+            rpc_log('not need to maintain',LOG_INFO);
+            return;
+        }
+        $this->cleanupWorker();
+        $workersNum = count($this->workers);
+        rpc_log('>>>>workerNum:' . $workersNum);
+        if ($workersNum < $this->minWorkerNum) {
+            $stepNum = $this->minWorkerNum - $workersNum;
+            for ($i = 0; $i < $stepNum; $i++) {
+                $this->forkWorker();
+            }
+        }
+        rpc_log('<<<<workerNum:' . $workersNum);
+        $this->lastMaintainTime = time();
+    }
+
+    protected function shutdown()
+    {
+        $pids = array_keys($this->workers);
+        foreach ($pids as $pid) {
+            posix_kill($pid, SIGTERM);
+        }
+    }
+
+    protected function borrowWorker()
+    {
+        if (!empty($this->workerQueue)) {
+            $wid = array_shift($this->workerQueue);
+            $this->workers[$wid][1] = false;
+            return $wid;
+        }
+        return false;
+    }
+
+    protected function addWorker($wid)
+    {
+        if (!array_key_exists($wid, $this->workers)) {
+            $this->workers[$wid] = array(time(), true);
+        } else {
+            $this->workers[$wid][1] = true;
+        }
+        array_unshift($this->workerQueue, $wid);
+    }
+
+    private function forkAndExec($cmd, $args = array())
+    {
+        $pid = pcntl_fork();
+        if ($pid > 0) {
+            return $pid;
+        } else if ($pid == 0) {
+            pcntl_exec($cmd, $args);
+            exit(0);
+        } else {
+            rpc_log('could not fork',LOG_ERR);
+            exit(-1);
+        }
+    }
+
+    private function cleanupWorker()
+    {
+        if ($this->workers) {
+            foreach ($this->workers as $wid => $wInfo) {
+                list($createTime, $status) = $wInfo;
+                if ($createTime + $this->timeout < time() && $status) {
+                    if (posix_kill($wid, SIGTERM)) {
+                        unset($this->workers[$wid]);
+                        $idx = array_search($wid, $this->workerQueue);
+                        if ($idx !== false) {
+                            unset($this->workerQueue[$idx]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private function handlePending()
+    {
+        rpc_log('task queue length:' . $this->taskQueue->count());
+        while (!$this->taskQueue->isEmpty()) {
+            $frames = $this->taskQueue->dequeue();
+            rpc_log('process pending...');
+            if (!$this->forwardToWorker($frames)) {
+                break;
+            }
+        }
+    }
+
+    protected function forwardToWorker($frames)
+    {
+        list($envelope, $message) = rpc_unwarp_message($frames);
+        $version = array_shift($message);
         //get a worker
-        $worker=array_shift($this->workers);
-        $command=chr(0x00);
-        $frames=array($worker,'',self::VERSION,$command);
-        $frames=array_merge($frames,$envelope,array(''),$message);
-        rpc_send_frames($this->socket_worker,$frames);
-	}
+        $wid = $this->borrowWorker();
+        if (empty($wid)) {
+            $this->taskQueue->enqueue($frames);
+            $this->forkWorker();
+            return false;
+        }
+        $command = chr(0x00);
+        $frames = array($wid, '', self::VERSION, $command);
+        $frames = array_merge($frames, $envelope, array(''), $message);
+        rpc_send_frames($this->socketWorker, $frames);
+        return $wid;
+    }
 
-	protected function worker_process(){
-        $frames=rpc_receive_frames($this->socket_worker);
-        list($envelope,$message)=rpc_unwarp_message($frames);
-        $worker=$envelope[0];
-        $version=array_shift($message);
-        $command=ord(array_shift($message));
-        rpc_log('version:'.$version.',command:'.$command);
-        if($command==0x00){ //send back response
-            list($envelope,$message)=rpc_unwarp_message($message);
-            array_unshift($message,self::VERSION);
-            $frames=rpc_warp_message($envelope,$message);
-            rpc_send_frames($this->socket_client,$frames);
-            array_push($this->workers,$worker);
+    protected function forkWorker()
+    {
+        if (count($this->workers) >= $this->maxWorkerNum) {
+            return false;
         }
-        elseif($command==0x01){ //heartbeat
-            if(array_search($worker,$this->workers,true)===false){
-                array_push($this->workers,$worker);
-            }
+        $pid = $this->forkAndExec('/usr/bin/env', array('php', $this->workerScript, $this->backendPoint));
+        if ($pid) {
+            $this->workers[$pid] = array(time(), true);
+            array_unshift($this->workerQueue,$pid);
         }
-        else{
+        return $pid;
+    }
+
+    protected function clientProcess()
+    {
+        $frames = rpc_receive_frames($this->socketClient);
+        $this->forwardToWorker($frames);
+    }
+
+    protected function workerProcess()
+    {
+        $frames = rpc_receive_frames($this->socketWorker);
+        list($envelope, $message) = rpc_unwarp_message($frames);
+        $wid = $envelope[0];
+        $version = array_shift($message);
+        $command = ord(array_shift($message));
+        rpc_log('version:' . $version . ',command:' . $command);
+        if ($command == 0x00) { //send back response
+            list($envelope, $message) = rpc_unwarp_message($message);
+            array_unshift($message, self::VERSION);
+            $frames = rpc_warp_message($envelope, $message);
+            rpc_send_frames($this->socketClient, $frames);
+            $this->addWorker($wid);
+            $this->handlePending();
+        } elseif ($command == 0x01) { //heartbeat
+            $this->addWorker($wid);
+            $this->handlePending();
+        } else {
             //@todo
         }
-	}
-
-
+    }
 }
-
 

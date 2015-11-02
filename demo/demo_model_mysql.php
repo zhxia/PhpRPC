@@ -14,7 +14,7 @@ class demo_model_mysql
     protected $mysqlConnection=null;
     function __construct()
     {
-        $this->mysqlConnection=new mysqli('127.0.0.1','root','admin','jobs');
+        $this->mysqlConnection=new mysqli('127.0.0.1','root','','test');
         if($this->mysqlConnection->connect_errno){
             die('connect error:'.$this->mysqlConnection->error);
         }
@@ -23,7 +23,7 @@ class demo_model_mysql
     public function executeSql($sql){
         $result=$this->mysqlConnection->query($sql);
         if($result){
-            $data=$result->fetch_array();
+            $data=$result->fetch_all(MYSQLI_ASSOC);
             $result->close();
             return $data;
         }

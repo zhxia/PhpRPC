@@ -2,43 +2,58 @@
 /**
  * Created by PhpStorm.
  * User: zhxia
- * Date: 5/24/15
- * Time: 2:19 PM
+ * Date: 6/13/15
+ * Time: 9:27 PM
  */
-
 require_once dirname(__FILE__) . '/../src/proxy.php';
 
-function fork_and_exec($cmd, $args = array())
-{
-    $pid = pcntl_fork();
-    if ($pid > 0) {
-        return $pid;
-    } else if ($pid == 0) {
-        pcntl_exec($cmd, $args);
-        exit(0);
+$shortOption = 'hf:b:m:n:s:dt::';
+$longOption = array('help', 'frontend:', 'backend:', 'max-workers:', 'min-workers:', 'workerscript:', 'daemon', 'timeout::');
+$params = getopt($shortOption, $longOption);
+if (isset($params['h'])) {
+    echo 'usage:' . $argv[0] . ' options' . PHP_EOL;
+    exit(0);
+}
+if (isset($params['f']) && $params['f']) {
+    $frontend = $params['f'];
+}
+if (isset($params['b']) && $params['b']) {
+    $backend = $params['b'];
+}
+if (isset($params['m']) && $params['m']) {
+    $maxWorkers = $params['m'];
+}
+if (isset($params['n']) && $params['n']) {
+    $minWorkers = $params['n'];
+}
+$daemon = false;
+if (isset($params['d'])) {
+    $daemon = true;
+}
+if ($daemon) {
+    if (pcntl_fork() === 0) {
+        posix_setsid();
+        if (pcntl_fork() === 0) {
+            startProxy($frontend, $backend, $minWorkers, $maxWorkers);
+        } else {
+            exit;
+        }
     } else {
-        // TODO:
-        die('could not fork');
+        pcntl_wait($status);
     }
+} else {
+    startProxy($frontend, $backend, $minWorkers, $maxWorkers);
 }
 
-$frontend = 'ipc:///tmp/frontend.ipc';
-$backend = 'ipc:///tmp/backend.ipc';
-$context = new ZMQContext();
-$proxy = new RpcProxy($context, $frontend, $backend);
-$worker = dirname(__FILE__) . '/demo_worker.php';
-$worker_num = 5;
-if ($argc > 1) {
-    $worker_num = (int)$argv[1];
+function startProxy($frontend, $backend, $minWorkers, $maxWorkers)
+{
+    $context = new ZMQContext();
+    $proxy = new RpcProxy($context, $frontend, $backend);
+    $proxy->setMaxWorkerNum($maxWorkers);
+    $proxy->setMinWorkerNum($minWorkers);
+    $proxy->setWorkerScript('demo_worker.php');
+    $proxy->run();
 }
-$pids = array();
-for ($i = 0; $i < $worker_num; $i++) {
-    $pids[] = fork_and_exec('/usr/bin/env', array('php', $worker));
-}
-register_shutdown_function(function ($pids) {
-    foreach ($pids as $pid) {
-        posix_kill($pid, SIGTERM);
-    }
-});
-$proxy->run();
+
+
 
