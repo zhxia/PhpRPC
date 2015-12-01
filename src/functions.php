@@ -1,5 +1,5 @@
 <?php
-define('LOG_LEVEL', LOG_DEBUG);
+define('LOG_LEVEL', LOG_WARNING);
 function rpc_pack_message($unpacked_message)
 {
 //    return json_encode($unpacked_message);

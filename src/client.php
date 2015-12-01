@@ -86,11 +86,11 @@ class RpcClient
             if ($timeout !== null) {
                 if (rpc_millitime() - $beginTime > $timeout_micro) {
                     //如果超时了，需要清除pending_requests
-                    foreach(self::$pending_requests as $key=>$val){
+                   /* foreach(self::$pending_requests as $key=>$val){
                         if($val[2]+$timeout_micro<rpc_millitime()){
                             unset(self::$pending_requests[$key]);
                         }
-                    }
+                    }*/
                     break;
                 }
             }

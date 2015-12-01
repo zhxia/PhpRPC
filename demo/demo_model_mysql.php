@@ -18,6 +18,7 @@ class demo_model_mysql
         if($this->mysqlConnection->connect_errno){
             die('connect error:'.$this->mysqlConnection->error);
         }
+        $this->mysqlConnection->query('set names "utf8"');
     }
 
     public function executeSql($sql){

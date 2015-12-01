@@ -4,7 +4,7 @@ require_once dirname(__FILE__) . '/functions.php';
 class RpcProxy
 {
     const VERSION = '10';
-    private $timeout = 600;  //worker 进程的生存时间
+    private $timeout = 20;  //worker 进程的生存时间
     private $maxWorkerNum = 5; //最大worker数量
     private $minWorkerNum = 1; // 最小worker数量
     const MAINTAIN_INTERVAL = 10; //定时维护worker进程的时间间隔
@@ -77,7 +77,7 @@ class RpcProxy
 
     public function run()
     {
-        rpc_log('proxy is running...',LOG_INFO);
+        rpc_log('proxy is running...', LOG_INFO);
         register_shutdown_function(array($this, 'shutdown'));
         while (!$this->interrupted) {
             $this->maintain();
@@ -106,11 +106,13 @@ class RpcProxy
     protected function maintain()
     {
         if ($this->lastMaintainTime > 0 && (time() - $this->lastMaintainTime < self::MAINTAIN_INTERVAL)) {
-            rpc_log('not need to maintain',LOG_INFO);
+            rpc_log('no need to maintain,last maintain:' . date('Y-m-d H:i:s', $this->lastMaintainTime), LOG_INFO);
             return;
         }
-        $this->cleanupWorker();
         $workersNum = count($this->workers);
+        if ($workersNum >= $this->minWorkerNum) {
+            $this->cleanupWorker();
+        }
         rpc_log('>>>>workerNum:' . $workersNum);
         if ($workersNum < $this->minWorkerNum) {
             $stepNum = $this->minWorkerNum - $workersNum;
@@ -132,22 +134,23 @@ class RpcProxy
 
     protected function borrowWorker()
     {
-        if (!empty($this->workerQueue)) {
-            $wid = array_shift($this->workerQueue);
+        print_r($this->workers);
+        print_r($this->workerQueue);
+        $wid = array_shift($this->workerQueue);
+        if (isset($this->workers[$wid])) {
             $this->workers[$wid][1] = false;
-            return $wid;
         }
-        return false;
+        return $wid;
     }
 
     protected function addWorker($wid)
     {
-        if (!array_key_exists($wid, $this->workers)) {
+        if (!isset($this->workers[$wid])) {
             $this->workers[$wid] = array(time(), true);
         } else {
             $this->workers[$wid][1] = true;
         }
-        array_unshift($this->workerQueue, $wid);
+        array_push($this->workerQueue, $wid);
     }
 
     private function forkAndExec($cmd, $args = array())
@@ -159,24 +162,20 @@ class RpcProxy
             pcntl_exec($cmd, $args);
             exit(0);
         } else {
-            rpc_log('could not fork',LOG_ERR);
+            rpc_log('could not fork', LOG_ERR);
             exit(-1);
         }
     }
 
     private function cleanupWorker()
     {
-        if ($this->workers) {
-            foreach ($this->workers as $wid => $wInfo) {
-                list($createTime, $status) = $wInfo;
-                if ($createTime + $this->timeout < time() && $status) {
-                    if (posix_kill($wid, SIGTERM)) {
-                        unset($this->workers[$wid]);
-                        $idx = array_search($wid, $this->workerQueue);
-                        if ($idx !== false) {
-                            unset($this->workerQueue[$idx]);
-                        }
-                    }
+        foreach ($this->workers as $wid => $wInfo) {
+            list($createTime, $status) = $wInfo;
+            if ($createTime + $this->timeout < time() && $status) {
+                if (posix_kill($wid, SIGTERM)) {
+                    unset($this->workers[$wid]);
+                    $idx = array_search($wid, $this->workerQueue);
+                    unset($this->workerQueue[$idx]);
                 }
             }
         }
@@ -219,8 +218,7 @@ class RpcProxy
         }
         $pid = $this->forkAndExec('/usr/bin/env', array('php', $this->workerScript, $this->backendPoint));
         if ($pid) {
-            $this->workers[$pid] = array(time(), true);
-            array_unshift($this->workerQueue,$pid);
+            $this->addWorker($pid);
         }
         return $pid;
     }
