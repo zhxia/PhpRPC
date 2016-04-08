@@ -4,10 +4,10 @@ require_once dirname(__FILE__) . '/functions.php';
 class RpcProxy
 {
     const VERSION = '10';
-    private $timeout = 20;  //worker 进程的生存时间
+    private $timeout = 600;  //worker 进程的生存时间
     private $maxWorkerNum = 5; //最大worker数量
     private $minWorkerNum = 1; // 最小worker数量
-    const MAINTAIN_INTERVAL = 10; //定时维护worker进程的时间间隔
+    const MAINTAIN_INTERVAL = 60; //定时维护worker进程的时间间隔
     private $workers;
     private $workerQueue;
     private $taskQueue;
@@ -22,6 +22,9 @@ class RpcProxy
 
     function __construct($context, $frontend, $backend)
     {
+        if (function_exists('cli_set_process_title')) {
+            cli_set_process_title('ARPC: Proxy process');
+        }
         $this->workers = array(); //element:array('wid'=>array('creteTime','flag'))
         $this->workerQueue = array();
         $this->taskQueue = new SplQueue();

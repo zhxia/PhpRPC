@@ -23,6 +23,9 @@ class RpcWorker
 
     public function __construct($context, $endpoint)
     {
+        if(function_exists('cli_set_process_title')){
+            cli_set_process_title('ARPC: worker process');
+        }
         $socket = new ZMQSocket($context, ZMQ::SOCKET_DEALER);
         $socket->setSockOpt(ZMQ::SOCKOPT_LINGER, 0);
         $socket->setSockOpt(ZMQ::SOCKOPT_IDENTITY, strval(posix_getpid()));
