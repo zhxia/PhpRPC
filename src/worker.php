@@ -59,7 +59,7 @@ class RpcWorker
     {
         rpc_log('get task from client');
         $frames = rpc_receive_frames($this->socket);
-        list($envelope, $message) = rpc_unwarp_message($frames);
+        list($envelope, $message) = rpc_unwrap_message($frames);
         $version = array_shift($message);
         $command = array_shift($message);
         if ($command == 0x00) {
@@ -69,7 +69,7 @@ class RpcWorker
 
     protected function process_request($message)
     {
-        list($envelope, $message) = rpc_unwarp_message($message);
+        list($envelope, $message) = rpc_unwrap_message($message);
         list($seq, $timestamp, $expiry) = rpc_unpack_message(array_shift($message));
         $now = rpc_millitime();
         if ($now > $timestamp + $expiry) {

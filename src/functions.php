@@ -42,7 +42,7 @@ function rpc_receive_frames($socket)
     return $frames;
 }
 
-function rpc_warp_message($envelope, $message)
+function rpc_wrap_message($envelope, $message)
 {
     return array_merge(
         $envelope,
@@ -51,7 +51,7 @@ function rpc_warp_message($envelope, $message)
     );
 }
 
-function rpc_unwarp_message($frames)
+function rpc_unwrap_message($frames)
 {
     $idx = array_search('', $frames, true);
     if ($idx === false) {

@@ -198,7 +198,7 @@ class RpcProxy
 
     protected function forwardToWorker($frames)
     {
-        list($envelope, $message) = rpc_unwarp_message($frames);
+        list($envelope, $message) = rpc_unwrap_message($frames);
         $version = array_shift($message);
         //get a worker
         $wid = $this->borrowWorker();
@@ -235,15 +235,15 @@ class RpcProxy
     protected function workerProcess()
     {
         $frames = rpc_receive_frames($this->socketWorker);
-        list($envelope, $message) = rpc_unwarp_message($frames);
+        list($envelope, $message) = rpc_unwrap_message($frames);
         $wid = $envelope[0];
         $version = array_shift($message);
         $command = ord(array_shift($message));
         rpc_log('version:' . $version . ',command:' . $command);
         if ($command == 0x00) { //send back response
-            list($envelope, $message) = rpc_unwarp_message($message);
+            list($envelope, $message) = rpc_unwrap_message($message);
             array_unshift($message, self::VERSION);
-            $frames = rpc_warp_message($envelope, $message);
+            $frames = rpc_wrap_message($envelope, $message);
             rpc_send_frames($this->socketClient, $frames);
             $this->addWorker($wid);
             $this->handlePending();

@@ -113,7 +113,7 @@ class RpcClient
     protected static function process_reply($socket)
     {
         $frames = rpc_receive_frames($socket);
-        list($envelope, $message) = rpc_unwarp_message($frames);
+        list($envelope, $message) = rpc_unwrap_message($frames);
         $version = array_shift($message);
         list($seq, $timestamp, $status) = rpc_unpack_message(array_shift($message));
         $response = array_shift($message);
